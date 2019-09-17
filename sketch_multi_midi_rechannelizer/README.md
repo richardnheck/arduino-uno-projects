@@ -11,3 +11,8 @@ Components were purchased here:
 * https://core-electronics.com.au/uno-r3.html
 * https://www.auselectronicsdirect.com.au/2-x-16-lcd-display-controller-shield-for-arduino-d
 * https://www.auselectronicsdirect.com.au/midi-shield-musical-board-for-arduino
+
+## Environment
+This project is built with PlatformIO in Visual Studio Code instead of using the basic Arduino IDE. 
+
+Refer to details here: https://platformio.org/install/ide?install=vscode
