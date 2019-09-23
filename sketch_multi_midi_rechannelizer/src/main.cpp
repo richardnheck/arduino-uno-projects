@@ -54,20 +54,21 @@ byte curMenuIndex = 0; // The currently selected menu page index
 const byte NUM_MENU_PAGES = 6;
 
 String menu[] = {
-    "MIDI MONITOR",
-    "MIDIMAP",
-    "RESET MIDIMAP",
     "LOAD PATCH",
+    "MIDIMAP",
     "SAVE PATCH",
-    "CLEAR PATCH"};
+    "CLEAR PATCH",
+    "RESET MIDIMAP",
+    "MIDI MONITOR"};
 
+// These constants must be in the order of the above menu
+const byte MENU_LOAD_PATCH = 0;
 const byte MENU_MIDIMAP = 1;
-const byte MENU_RESET_MIDIMAP = 2;
-const byte MENU_LOAD_PATCH = 3;
-const byte MENU_SAVE_PATCH = 4;
-const byte MENU_CLEAR_PATCH = 5;
+const byte MENU_SAVE_PATCH = 2;
+const byte MENU_CLEAR_PATCH = 3;
+const byte MENU_RESET_MIDIMAP = 4;
+const byte DEBUG_MENU_MONITOR = 5;
 
-const byte DEBUG_MENU_MONITOR = 0;
 /*
    --------------------------------------------------------------------------------------
    MIDIMAP
@@ -394,11 +395,224 @@ void lcdPrintMenuPage()
 
 /*
    -------------------------------------------------------------------------------------------
+   MIDIMAP PAGE LOGIC
+   -------------------------------------------------------------------------------------------
+*/
+void midimap_incrementMidiChannel()
+{
+  midiChannel = (midiChannel < 16) ? midiChannel + 1 : 1;
+  lcdPrintMidiChannelMap();
+}
+
+void midimap_decrementMidiChannel()
+{
+  midiChannel = (midiChannel > 1) ? midiChannel - 1 : 16;
+  lcdPrintMidiChannelMap();
+}
+
+void midimap_incrementMapsToChannel()
+{
+  midiMap[midiChannel].incrementMapsTo();
+  lcdPrintMidiChannelMap();
+}
+
+void midimap_decrementMapsToChannel()
+{
+  midiMap[midiChannel].decrementMapsTo();
+  lcdPrintMidiChannelMap();
+}
+
+void resetMidiMap()
+{
+  initializeDefaultMidiMap();
+  lcd.setCursor(0, 1);
+  lcd.print("reset!");
+  delay(250);
+  curMenuIndex = MENU_MIDIMAP;
+  lcdPrintMenuPage();
+}
+
+/*
+   -------------------------------------------------------------------------------------------
+   PATCH PAGES LOGIC
+   -------------------------------------------------------------------------------------------
+*/
+void loadSelectedPatch()
+{
+  patchManager.loadMidiMap();
+  lcd.setCursor(0, 1);
+  lcd.print("loaded!");
+  delay(250);
+  curMenuIndex = MENU_MIDIMAP;
+  lcdPrintMenuPage();
+}
+
+void saveMidiMapToSelectedPatch()
+{
+  patchManager.saveMidiMap();
+  lcd.setCursor(0, 1);
+  lcd.print("saved!");
+  delay(250);
+  curMenuIndex = MENU_MIDIMAP;
+  lcdPrintMenuPage();
+}
+
+void clearSelectedPatch()
+{
+  patchManager.clearPatch();
+  lcd.setCursor(0, 1);
+  lcd.print("cleared!");
+  delay(250);
+  lcdPrintMenuPage();
+}
+
+void incrementPatchNumber()
+{
+  patchManager.incrementPatchNumber();
+  lcdPrintPatchNumber();
+}
+
+void decrementPatchNumber()
+{
+  patchManager.decrementPatchNumber();
+  lcdPrintPatchNumber();
+}
+
+
+/*
+   -------------------------------------------------------------------------------------------
+   MENU LOGIC
+   -------------------------------------------------------------------------------------------
+*/
+void changeMenu()
+{
+  curMenuIndex = (curMenuIndex < (NUM_MENU_PAGES - 1)) ? curMenuIndex + 1 : 0; // change the menu page
+  lcdPrintMenuPage();
+}
+
+
+/*
+   -------------------------------------------------------------------------------------------
+   HANDLE BUTTON LOGIC
+   -------------------------------------------------------------------------------------------
+*/
+
+void handleButtonRightPressed()
+{
+  switch (curMenuIndex)
+  {
+  case MENU_MIDIMAP:
+    midimap_incrementMidiChannel();
+    break;
+  case MENU_RESET_MIDIMAP:
+    resetMidiMap();
+    break;
+  case MENU_LOAD_PATCH:
+    loadSelectedPatch();
+    break;
+  case MENU_SAVE_PATCH:
+    saveMidiMapToSelectedPatch();
+    break;
+  case MENU_CLEAR_PATCH:
+    clearSelectedPatch();
+    break;
+  }
+}
+
+void handleButtonLeftPressed()
+{
+  switch (curMenuIndex)
+  {
+  case MENU_MIDIMAP:
+    midimap_decrementMidiChannel();
+    break;
+  }
+}
+
+void handleButtonUpPressed()
+{
+  switch (curMenuIndex)
+  {
+  case MENU_MIDIMAP:
+    midimap_incrementMapsToChannel();
+    break;
+  case MENU_LOAD_PATCH:
+  case MENU_SAVE_PATCH:
+  case MENU_CLEAR_PATCH:
+    incrementPatchNumber();
+    break;
+  }
+}
+
+void handleButtonDownPressed()
+{
+  switch (curMenuIndex)
+  {
+  case MENU_MIDIMAP:
+    midimap_decrementMapsToChannel();
+    break;
+  case MENU_LOAD_PATCH:
+  case MENU_SAVE_PATCH:
+  case MENU_CLEAR_PATCH:
+    decrementPatchNumber();
+    break;
+  }
+}
+
+void handleButtonSelectPressed()
+{
+  changeMenu();
+}
+
+/*
+   -------------------------------------------------------------------------------------------
+   MIDI STUFF
+   -------------------------------------------------------------------------------------------
+*/
+void doMidiMonitor()
+{
+  if (curMenuIndex == DEBUG_MENU_MONITOR)
+  {
+    lcdPrintMidiMonitor(midiA.getChannel(), midiA.getType(), midiA.getData1(), midiA.getData2());
+  }
+}
+
+void performMidiMapping()
+{
+  if (enableThru)
+  {
+    // Thru on A has already pushed the input message to out A.
+  }
+  else
+  {
+    // Thru is disabled in the library so do it manually
+    // Perform the Thru manually
+    if (midiA.read())
+    {
+      int incomingMidiChannel = midiA.getChannel();
+      MidiMapItem midiMapItem = midiMap[incomingMidiChannel];
+
+      // The outgoing midi channel is overriden if a mapping exists, otherwise it is unchanged
+      int outgoingMidiChannel = (midiMapItem.mapsTo > 0) ? midiMapItem.mapsTo : incomingMidiChannel;
+
+      midiA.send(midiA.getType(),
+                 midiA.getData1(),
+                 midiA.getData2(),
+                 outgoingMidiChannel);
+
+      doMidiMonitor();
+    }
+  }
+}
+
+/*
+   -------------------------------------------------------------------------------------------
    SETUP
    -------------------------------------------------------------------------------------------
 */
 void setup()
 {
+  Serial.begin(9600);
   //int tickEvent = t.every(250, onTimerTick);
 
   // Initialize default midi mapping. i.e. Each channel maps to itself
@@ -455,57 +669,10 @@ void setup()
 byte button;
 void loop()
 {
-  if (enableThru)
-  {
-    // Thru on A has already pushed the input message to out A.
-  }
-  else
-  {
-    // Thru is disabled in the library so do it manually
-    // Perform the Thru manually
-    if (midiA.read())
-    {
-      int incomingMidiChannel = midiA.getChannel();
-      MidiMapItem midiMapItem = midiMap[incomingMidiChannel];
-
-      // The outgoing midi channel is overriden if a mapping exists, otherwise it is unchanged
-      int outgoingMidiChannel = (midiMapItem.mapsTo > 0) ? midiMapItem.mapsTo : incomingMidiChannel;
-
-      midiA.send(midiA.getType(),
-                 midiA.getData1(),
-                 midiA.getData2(),
-                 outgoingMidiChannel);
-
-      if (curMenuIndex == DEBUG_MENU_MONITOR)
-      {
-        lcdPrintMidiMonitor(midiA.getChannel(), midiA.getType(), midiA.getData1(), midiA.getData2());
-      }
-      //debugSerial.print(midiA.getChannel());
-    }
-  }
+  performMidiMapping();
 
   //get the latest button pressed, also the buttonJustPressed, buttonJustReleased flags
   button = ReadButtons();
-
-  if (buttonJustPressed)
-  {
-    //Serial.println(">Pressed");
-    // //Serial.write(button);
-    ////Serial.print("\t");
-  }
-  if (buttonJustReleased)
-  {
-    //Serial.println(">Released");
-    ////Serial.write(button);
-    ////Serial.print("\t");
-  }
-
-  //blank the demo text line if a new button is pressed or released, ready for a new label to be written
-  if (buttonJustPressed || buttonJustReleased)
-  {
-    //lcd.setCursor( 4, 1 );
-    //lcd.print( "            " );
-  }
 
   //show text label for the button pressed
   switch (button)
@@ -514,110 +681,34 @@ void loop()
   {
     break;
   }
+  case BUTTON_LEFT:
+  {
+    delay(250);
+    handleButtonLeftPressed();
+    break;
+  }
   case BUTTON_RIGHT:
   {
     delay(250);
-    switch (curMenuIndex)
-    {
-    case MENU_MIDIMAP:
-      midiChannel = (midiChannel < 16) ? midiChannel + 1 : 1;
-      lcdPrintMidiChannelMap();
-      break;
-    case MENU_RESET_MIDIMAP:
-      initializeDefaultMidiMap();
-      lcd.setCursor(0, 1);
-      lcd.print("reset!");
-      delay(250);
-      curMenuIndex = MENU_MIDIMAP;
-      lcdPrintMenuPage();
-      break;
-    case MENU_LOAD_PATCH:
-      patchManager.loadMidiMap();
-      lcd.setCursor(0, 1);
-      lcd.print("loaded!");
-      delay(250);
-      curMenuIndex = MENU_MIDIMAP;
-      lcdPrintMenuPage();
-      break;
-    case MENU_SAVE_PATCH:
-      patchManager.saveMidiMap();
-      lcd.setCursor(0, 1);
-      lcd.print("saved!");
-      delay(250);
-      curMenuIndex = MENU_MIDIMAP;
-      lcdPrintMenuPage();
-      break;
-    case MENU_CLEAR_PATCH:
-      patchManager.clearPatch();
-      lcd.setCursor(0, 1);
-      lcd.print("cleared!");
-      delay(250);
-      lcdPrintMenuPage();
-      break;
-    }
+    handleButtonRightPressed();
     break;
   }
   case BUTTON_UP:
   {
     delay(250);
-    switch (curMenuIndex)
-    {
-    case MENU_MIDIMAP:
-      midiMap[midiChannel].incrementMapsTo();
-      lcdPrintMidiChannelMap();
-      break;
-    case MENU_LOAD_PATCH:
-    case MENU_SAVE_PATCH:
-    case MENU_CLEAR_PATCH:
-      patchManager.incrementPatchNumber();
-      lcdPrintPatchNumber();
-      break;
-    }
+    handleButtonUpPressed();
     break;
   }
   case BUTTON_DOWN:
   {
     delay(250);
-    switch (curMenuIndex)
-    {
-    case MENU_MIDIMAP:
-      midiMap[midiChannel].decrementMapsTo();
-      lcdPrintMidiChannelMap();
-      break;
-    case MENU_LOAD_PATCH:
-    case MENU_SAVE_PATCH:
-    case MENU_CLEAR_PATCH:
-      patchManager.decrementPatchNumber();
-      lcdPrintPatchNumber();
-      break;
-    }
-    break;
-  }
-  case BUTTON_LEFT:
-  {
-    delay(250);
-    switch (curMenuIndex)
-    {
-    case MENU_MIDIMAP:
-      midiChannel = (midiChannel > 1) ? midiChannel - 1 : 16;
-      lcdPrintMidiChannelMap();
-      break;
-    }
+    handleButtonDownPressed();
     break;
   }
   case BUTTON_SELECT:
   {
     delay(250);
-    curMenuIndex = (curMenuIndex < NUM_MENU_PAGES - 1) ? curMenuIndex + 1 : 0; // change the menu page
-    lcdPrintMenuPage();
-    //
-    //        lcd.setCursor(4, 1);
-    //        lcd.print( "saving..." );
-    //        //saveMidiMapToEEPROM();
-    //        lcd.print( "done!" );
-    //        delay(250);
-    //        lcd.setCursor(4, 1);
-    //        //lcd.print("          ");
+    handleButtonSelectPressed();
     break;
   }
   default:
