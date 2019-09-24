@@ -1,14 +1,8 @@
-//Sample using LiquidCrystal library
 #include <LiquidCrystal.h>
 #include <MIDI.h>
 #include <midi_DEFS.h>
 #include <EEPROM.h>
-//#include "Timer.h"
-/*******************************************************
-  hisT program will test the LCD panel and the buttons
-  https://www.auselectronicsdirect.com.au/assets/files/TA0055%20LCD%20Controller.pdf
-  Mark Bramwell, July 2010
-********************************************************/
+#include "AnalogDebounce.h"
 
 //#include <SoftwareSerial.h>
 
@@ -21,29 +15,27 @@ const byte txPin = 2;
 
 // select the pins used on the LCD panel
 LiquidCrystal lcd(8, 9, 4, 5, 6, 7);
-// define some values used by the panel and buttons
-int lcd_key = 0;
-int adc_key_in = 0;
-#define btnRIGHT 0
-#define btnUP 1
-#define btnDOWN 2
-#define btnLEFT 3
-#define btnSELECT 4
-#define btnNONE 5
 
-#define BUTTON_ADC_PIN A0 // A0 is the button ADC input
+#define BUTTON_ADC_PIN A0     // A0 is the button ADC input for the Keypad
 
-//return values for ReadButtons()
-#define BUTTON_NONE 0   //
-#define BUTTON_RIGHT 1  //
-#define BUTTON_UP 2     //
-#define BUTTON_DOWN 3   //
-#define BUTTON_LEFT 4   //
-#define BUTTON_SELECT 5 //
+// Buttons are based on an analog keypad
+//     1
+// 4 3   0
+//     2
+#define BUTTON_NONE 255 //
+#define BUTTON_RIGHT 0  //
+#define BUTTON_UP 1     //
+#define BUTTON_DOWN 2   //
+#define BUTTON_LEFT 3   //
+#define BUTTON_SELECT 4 //
+
+// Forward declaration for keypad button push handler
+void handleKeypadButtonPush(byte button);
+
+// Specify the anlog pin and handler for debouncing
+AnalogDebounce AnalogKeypadButtons(A0, handleKeypadButtonPush); // Analog Input 0,
 
 const byte MaxChannel = 16;
-
-//Timer t;
 
 /*
    --------------------------------------------------------------------------------------
@@ -172,76 +164,12 @@ void PatchManager::clearPatch()
   Variables
   --------------------------------------------------------------------------------------
 */
-static byte buttonJustPressed = false;  //this will be true after a ReadButtons() call if triggered
-static byte buttonJustReleased = false; //this will be true after a ReadButtons() call if triggered
-byte buttonWas = BUTTON_NONE;           //used by ReadButtons() for detection of button events
-
 byte midiChannel = 1;
 
 PatchManager patchManager;
 
-bool enableThru = false;
+bool enableThru = false;                // Do not enable auto thru for the midi library
 
-void onTimerTick()
-{
-}
-
-/*--------------------------------------------------------------------------------------
-  ReadButtons()
-  Detect the button pressed and return the value
-  Uses global values buttonWas, buttonJustPressed, buttonJustReleased.
-  --------------------------------------------------------------------------------------*/
-byte ReadButtons()
-{
-  unsigned int buttonVoltage;
-  byte button = BUTTON_NONE; // return no button pressed if the below checks don't write to btn
-
-  //read the button ADC pin voltage
-  buttonVoltage = analogRead(BUTTON_ADC_PIN);
-
-  //sense if the voltage falls within valid voltage windows
-  if (buttonVoltage < 50)
-  {
-    button = BUTTON_RIGHT;
-  }
-  else if (buttonVoltage < 195)
-  {
-    button = BUTTON_UP;
-  }
-  else if (buttonVoltage < 380)
-  {
-    button = BUTTON_DOWN;
-  }
-  else if (buttonVoltage < 555)
-  {
-    button = BUTTON_LEFT;
-  }
-  else if (buttonVoltage < 790)
-  {
-    button = BUTTON_SELECT;
-  }
-
-  //handle button flags for just pressed and just released events
-  if ((buttonWas == BUTTON_NONE) && (button != BUTTON_NONE))
-  {
-    //the button was just pressed, set buttonJustPressed, this can optionally be used to trigger a once-off action for a button press event
-    //it's the duty of the receiver to clear these flags if it wants to detect a new button change event
-    buttonJustPressed = true;
-    buttonJustReleased = false;
-    //Serial.print("press");
-  }
-  if ((buttonWas != BUTTON_NONE) && (button == BUTTON_NONE))
-  {
-    buttonJustPressed = false;
-    buttonJustReleased = true;
-    //Serial.print("release");
-  }
-
-  //save the latest button value, for change event detection next time round
-  buttonWas = button;
-
-  return (button);
-}
 
 void initializeDefaultMidiMap()
 {
@@ -282,8 +210,10 @@ void lcdPrintPatchNumber()
 }
 
 String previousTypeDescription = "";
-char buffer[16];
 
+/**
+ * TODO: THIS STILL CRASHES WHEN MIDI MONITOR IS NOT THE FIRST THE MENU ITEM
+ */ 
 void lcdPrintMidiMonitor(byte channel, midi::MidiType type, midi::DataByte dataByte1, midi::DataByte dataByte2)
 {
   if (type == midi::MidiType::Clock || type == midi::MidiType::ActiveSensing)
@@ -344,6 +274,8 @@ void lcdPrintMidiMonitor(byte channel, midi::MidiType type, midi::DataByte dataB
     typeDescription = "Unknown";
     break;
   }
+
+  
   if (typeDescription != previousTypeDescription)
   {
     lcd.setCursor(0, 0);
@@ -354,14 +286,17 @@ void lcdPrintMidiMonitor(byte channel, midi::MidiType type, midi::DataByte dataB
   previousTypeDescription = typeDescription;
 
   lcd.setCursor(0, 1);
-  if (dataByte2 != NULL)
+  char buffer[16];
+  
+  if (dataByte2 != 0)
   {
-    sprintf(buffer, "%02d %02X %02X %02X", channel, type, dataByte1, dataByte2);
+    snprintf(buffer, 16, "%02d %02X %02X %02X", channel, type, dataByte1, dataByte2);
   }
   else
   {
-    sprintf(buffer, "%02d %02X %02X", channel, type, dataByte1);
+    snprintf(buffer, 16, "%02d %02X %02X", channel, type, dataByte1);
   }
+  snprintf(buffer, 16, "%02d", 1);
   lcd.print(buffer);
 }
 
@@ -478,7 +413,6 @@ void decrementPatchNumber()
   lcdPrintPatchNumber();
 }
 
-
 /*
    -------------------------------------------------------------------------------------------
    MENU LOGIC
@@ -489,7 +423,6 @@ void changeMenu()
   curMenuIndex = (curMenuIndex < (NUM_MENU_PAGES - 1)) ? curMenuIndex + 1 : 0; // change the menu page
   lcdPrintMenuPage();
 }
-
 
 /*
    -------------------------------------------------------------------------------------------
@@ -563,6 +496,36 @@ void handleButtonSelectPressed()
 {
   changeMenu();
 }
+
+/**
+ * Handle a Keypad button push
+ * This is the callback handler when using the AnalogDebounce library
+ */ 
+void handleKeypadButtonPush(byte button)
+{
+  if (button != BUTTON_NONE)
+  {
+    switch (button)
+    {
+    case BUTTON_LEFT:
+      handleButtonLeftPressed();
+      break;
+    case BUTTON_RIGHT:
+      handleButtonRightPressed();
+      break;
+    case BUTTON_UP:
+      handleButtonUpPressed();
+      break;
+    case BUTTON_DOWN:
+      handleButtonDownPressed();
+      break;
+    case BUTTON_SELECT:
+      handleButtonSelectPressed();
+      break;
+    }
+  }
+}
+
 
 /*
    -------------------------------------------------------------------------------------------
@@ -666,60 +629,9 @@ void setup()
    LOOP
    -------------------------------------------------------------------------------------------
 */
-byte button;
 void loop()
 {
+  AnalogKeypadButtons.loopCheck();
+
   performMidiMapping();
-
-  //get the latest button pressed, also the buttonJustPressed, buttonJustReleased flags
-  button = ReadButtons();
-
-  //show text label for the button pressed
-  switch (button)
-  {
-  case BUTTON_NONE:
-  {
-    break;
-  }
-  case BUTTON_LEFT:
-  {
-    delay(250);
-    handleButtonLeftPressed();
-    break;
-  }
-  case BUTTON_RIGHT:
-  {
-    delay(250);
-    handleButtonRightPressed();
-    break;
-  }
-  case BUTTON_UP:
-  {
-    delay(250);
-    handleButtonUpPressed();
-    break;
-  }
-  case BUTTON_DOWN:
-  {
-    delay(250);
-    handleButtonDownPressed();
-    break;
-  }
-  case BUTTON_SELECT:
-  {
-    delay(250);
-    handleButtonSelectPressed();
-    break;
-  }
-  default:
-  {
-    break;
-  }
-  }
-
-  //clear the buttonJustPressed or buttonJustReleased flags, they've already done their job now.
-  if (buttonJustPressed)
-    buttonJustPressed = false;
-  if (buttonJustReleased)
-    buttonJustReleased = false;
 }
