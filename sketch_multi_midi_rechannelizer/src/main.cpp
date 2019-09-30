@@ -3,6 +3,7 @@
 #include <midi_DEFS.h>
 #include <EEPROM.h>
 #include "AnalogDebounce.h"
+#include <ArduinoJson.h>
 
 //#include <SoftwareSerial.h>
 
@@ -16,7 +17,7 @@ const byte txPin = 2;
 // select the pins used on the LCD panel
 LiquidCrystal lcd(8, 9, 4, 5, 6, 7);
 
-#define BUTTON_ADC_PIN A0     // A0 is the button ADC input for the Keypad
+#define BUTTON_ADC_PIN A0 // A0 is the button ADC input for the Keypad
 
 // Buttons are based on an analog keypad
 //     1
@@ -36,6 +37,112 @@ void handleKeypadButtonPush(byte button);
 AnalogDebounce AnalogKeypadButtons(A0, handleKeypadButtonPush); // Analog Input 0,
 
 const byte MaxChannel = 16;
+
+/*
+   --------------------------------------------------------------------------------------
+   EXTENDED EEPROM READ AND WRITE FUNCTIONS 
+   --------------------------------------------------------------------------------------
+*/
+// Absolute min and max eeprom addresses. Actual values are hardware-dependent.
+// These values can be changed e.g. to protect eeprom cells outside this range.
+const int EEPROM_MIN_ADDR = 0;
+const int EEPROM_MAX_ADDR = 1023; // Arduino UNO => 1024B
+
+// Returns true if the address is between the
+// minimum and maximum allowed values, false otherwise.
+//
+// This function is used by the other, higher-level functions
+// to prevent bugs and runtime errors due to invalid addresses.
+boolean eeprom_is_addr_ok(int addr)
+{
+  return ((addr >= EEPROM_MIN_ADDR) && (addr <= EEPROM_MAX_ADDR));
+}
+
+/**
+   Writes a sequence of bytes to eeprom starting at the specified address.
+   Returns true if the whole array is successfully written.
+   Returns false if the start or end addresses aren't between the minimum and maximum allowed values.
+   When returning false, nothing gets written to eeprom.
+*/
+boolean eeprom_write_bytes(int startAddr, const byte *array, int numBytes)
+{
+  int i;
+  // both first byte and last byte addresses must fall within the allowed range
+  if (!eeprom_is_addr_ok(startAddr) || !eeprom_is_addr_ok(startAddr + numBytes))
+  {
+    return false;
+  }
+  for (i = 0; i < numBytes; i++)
+  {
+    EEPROM.write(startAddr + i, array[i]);
+  }
+  return true;
+}
+
+/**
+   Writes a string starting at the specified address.
+   Returns true if the whole string is successfully written.
+   Returns false if the address of one or more bytes fall outside the allowed range.
+   If false is returned, nothing gets written to the eeprom.
+*/
+boolean eeprom_write_string(int addr, const char *string)
+{
+  int numBytes;                  // actual number of bytes to be written
+  numBytes = strlen(string) + 1; //write the string contents plus the string terminator byte (0x00)
+  return eeprom_write_bytes(addr, (const byte *)string, numBytes);
+}
+
+/**
+   Reads a string starting from the specified address.
+   Returns true if at least one byte (even only the string terminator one) is read.
+   Returns false if the start address falls outside the allowed range or declare buffer size is zero.
+
+   The reading might stop for several reasons:
+   - no more space in the provided buffer
+   - last eeprom address reached
+   - string terminator byte (0x00) encountered.
+*/
+boolean eeprom_read_string(int addr, char *buffer, int bufSize)
+{
+  byte ch;       // byte read from eeprom
+  int bytesRead; // number of bytes read so far
+  if (!eeprom_is_addr_ok(addr))
+  { // check start address
+    return false;
+  }
+
+  if (bufSize == 0)
+  { // how can we store bytes in an empty buffer ?
+    return false;
+  }
+  // is there is room for the string terminator only, no reason to go further
+  if (bufSize == 1)
+  {
+    buffer[0] = 0;
+    return true;
+  }
+  bytesRead = 0;                      // initialize byte counter
+  ch = EEPROM.read(addr + bytesRead); // read next byte from eeprom
+  buffer[bytesRead] = ch;             // store it into the user buffer
+  bytesRead++;                        // increment byte counter
+  // stop conditions:
+  // - the character just read is the string terminator one (0x00)
+  // - we have filled the user buffer
+  // - we have reached the last eeprom address
+  while ((ch != 0x00) && (bytesRead < bufSize) && ((addr + bytesRead) <= EEPROM_MAX_ADDR))
+  {
+    // if no stop condition is met, read the next byte from eeprom
+    ch = EEPROM.read(addr + bytesRead);
+    buffer[bytesRead] = ch; // store it into the user buffer
+    bytesRead++;            // increment byte counter
+  }
+  // make sure the user buffer has a string terminator, (0x00) as its last byte
+  if ((ch != 0x00) && (bytesRead >= 1))
+  {
+    buffer[bytesRead - 1] = 0;
+  }
+  return true;
+}
 
 /*
    --------------------------------------------------------------------------------------
@@ -87,6 +194,7 @@ void MidiMapItem::decrementMapsTo()
 }
 
 MidiMapItem midiMap[MaxChannel + 1]; // midiMap[0] is not used because we are not using zero index to make it easier to understand
+
 /*
    --------------------------------------------------------------------------------------
    PATCH MANAGER
@@ -106,6 +214,32 @@ public:
   void loadMidiMap();
   bool patchExists();
   void clearPatch();
+
+  // New functionality saving patches as json
+  // Json to create is shown in example below
+  // {
+  //   "0": [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15],
+  //   "1": [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15],
+  //   "2": [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15],
+  //   "3": [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15],
+  //   "4": [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15],
+  //   "5": [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15],
+  //   "6": [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]
+  // }
+
+  // Based on ArduinoJson assistant the capacity required is:
+  // 7*JSON_ARRAY_SIZE(16) + JSON_OBJECT_SIZE(7) + 14 bytes for strings duplication
+  // https://arduinojson.org/v6/assistant/
+
+  // ??? This means that the most basic of json is too much for a Arduino UNO
+  static const int PatchCapacity = 7*JSON_ARRAY_SIZE(16) + JSON_OBJECT_SIZE(7) + 14;  // AVR 8-bit	952+14 = 966
+
+
+  StaticJsonDocument<PatchManager::PatchCapacity> jsonDoc;
+
+  void saveJsonPatch();
+  void loadJsonPatch();
+  void clearJsonPatch();
 };
 
 void PatchManager::incrementPatchNumber()
@@ -159,6 +293,36 @@ void PatchManager::clearPatch()
   }
 }
 
+void PatchManager::saveJsonPatch()
+{
+  // Write the midi map to json
+  for (byte i = 1; i <= MaxChannel; i++)
+  {
+    jsonDoc["midiMap"][i-1] = midiMap[i].mapsTo;
+  }
+
+  // Declare a buffer to hold the serialized json string
+  const int size = measureJson(jsonDoc) + 1;    // NB: measureJson() count doesn’t count the null-terminator so we need to add one to account for it in the string 
+  char buffer[size];
+  serializeJson(jsonDoc, buffer, size);         // Produce a minified JSON document
+
+  Serial.println("Saving json string to address 0");
+  eeprom_write_string(0, buffer);
+}
+
+void PatchManager::loadJsonPatch()
+{
+  // Load the patch from the EEPROM
+  // TODO
+
+  // Write the json midi map of the patch to the MidiMap
+  // TODO
+}
+
+void PatchManager::clearJsonPatch()
+{
+}
+
 /*
   --------------------------------------------------------------------------------------
   Variables
@@ -168,8 +332,7 @@ byte midiChannel = 1;
 
 PatchManager patchManager;
 
-bool enableThru = false;                // Do not enable auto thru for the midi library
-
+bool enableThru = false; // Do not enable auto thru for the midi library
 
 void initializeDefaultMidiMap()
 {
@@ -213,7 +376,7 @@ String previousTypeDescription = "";
 
 /**
  * TODO: THIS STILL CRASHES WHEN MIDI MONITOR IS NOT THE FIRST THE MENU ITEM
- */ 
+ */
 void lcdPrintMidiMonitor(byte channel, midi::MidiType type, midi::DataByte dataByte1, midi::DataByte dataByte2)
 {
   if (type == midi::MidiType::Clock || type == midi::MidiType::ActiveSensing)
@@ -275,7 +438,6 @@ void lcdPrintMidiMonitor(byte channel, midi::MidiType type, midi::DataByte dataB
     break;
   }
 
-  
   if (typeDescription != previousTypeDescription)
   {
     lcd.setCursor(0, 0);
@@ -287,7 +449,7 @@ void lcdPrintMidiMonitor(byte channel, midi::MidiType type, midi::DataByte dataB
 
   lcd.setCursor(0, 1);
   char buffer[16];
-  
+
   if (dataByte2 != 0)
   {
     snprintf(buffer, 16, "%02d %02X %02X %02X", channel, type, dataByte1, dataByte2);
@@ -500,7 +662,7 @@ void handleButtonSelectPressed()
 /**
  * Handle a Keypad button push
  * This is the callback handler when using the AnalogDebounce library
- */ 
+ */
 void handleKeypadButtonPush(byte button)
 {
   if (button != BUTTON_NONE)
@@ -525,7 +687,6 @@ void handleKeypadButtonPush(byte button)
     }
   }
 }
-
 
 /*
    -------------------------------------------------------------------------------------------
