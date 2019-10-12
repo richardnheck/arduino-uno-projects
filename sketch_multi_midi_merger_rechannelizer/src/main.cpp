@@ -7,12 +7,8 @@
 
 //#include <SoftwareSerial.h>
 
-MIDI_CREATE_INSTANCE(HardwareSerial, Serial, midiA);
-
-const byte rxPin = 3;
-const byte txPin = 2;
-
-//SoftwareSerial mySerial(rxPin, txPin);
+MIDI_CREATE_INSTANCE(HardwareSerial, Serial1, midi1);
+MIDI_CREATE_INSTANCE(HardwareSerial, Serial2, midi2);
 
 // select the pins used on the LCD panel
 LiquidCrystal lcd(8, 9, 4, 5, 6, 7);
@@ -697,7 +693,7 @@ void doMidiMonitor()
 {
   if (curMenuIndex == DEBUG_MENU_MONITOR)
   {
-    lcdPrintMidiMonitor(midiA.getChannel(), midiA.getType(), midiA.getData1(), midiA.getData2());
+    lcdPrintMidiMonitor(midi1.getChannel(), midi1.getType(), midi1.getData1(), midi1.getData2());
   }
 }
 
@@ -711,17 +707,17 @@ void performMidiMapping()
   {
     // Thru is disabled in the library so do it manually
     // Perform the Thru manually
-    if (midiA.read())
+    if (midi1.read())
     {
-      int incomingMidiChannel = midiA.getChannel();
+      int incomingMidiChannel = midi1.getChannel();
       MidiMapItem midiMapItem = midiMap[incomingMidiChannel];
 
       // The outgoing midi channel is overriden if a mapping exists, otherwise it is unchanged
       int outgoingMidiChannel = (midiMapItem.mapsTo > 0) ? midiMapItem.mapsTo : incomingMidiChannel;
 
-      midiA.send(midiA.getType(),
-                 midiA.getData1(),
-                 midiA.getData2(),
+      midi1.send(midi1.getType(),
+                 midi1.getData1(),
+                 midi1.getData2(),
                  outgoingMidiChannel);
 
       doMidiMonitor();
@@ -743,19 +739,19 @@ void setup()
   initializeDefaultMidiMap();
 
   // Initiate MIDI communications, listen to all channels
-  midiA.begin(MIDI_CHANNEL_OMNI);
+  midi1.begin(MIDI_CHANNEL_OMNI);
 
   // Handle default midi thru state for the library
   if (enableThru)
   {
-    if (!midiA.getThruState())
+    if (!midi1.getThruState())
     {
-      midiA.turnThruOn();
+      midi1.turnThruOn();
     }
   }
   else
   {
-    midiA.turnThruOff();
+    midi1.turnThruOff();
   }
 
   //pinMode( rxPin, INPUT );
