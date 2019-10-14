@@ -3,12 +3,21 @@
 #include <midi_DEFS.h>
 #include <EEPROM.h>
 #include "AnalogDebounce.h"
-#include <ArduinoJson.h>
+#include "Rotary.h"
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+#include <Wire.h>
 
-//#include <SoftwareSerial.h>
+#define SCREEN_WIDTH 128 // OLED display width, in pixels
+#define SCREEN_HEIGHT 64 // OLED display height, in pixels
+// Declaration for an SSD1306 display connected to I2C (SDA, SCL pins)
+#define OLED_RESET     4 // Reset pin # (or -1 if sharing Arduino reset pin)
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 
 MIDI_CREATE_INSTANCE(HardwareSerial, Serial1, midi1);
 MIDI_CREATE_INSTANCE(HardwareSerial, Serial2, midi2);
+
+Rotary rotary = Rotary(23, 22);
 
 // select the pins used on the LCD panel
 LiquidCrystal lcd(8, 9, 4, 5, 6, 7);
@@ -33,112 +42,6 @@ void handleKeypadButtonPush(byte button);
 AnalogDebounce AnalogKeypadButtons(A0, handleKeypadButtonPush); // Analog Input 0,
 
 const byte MaxChannel = 16;
-
-/*
-   --------------------------------------------------------------------------------------
-   EXTENDED EEPROM READ AND WRITE FUNCTIONS 
-   --------------------------------------------------------------------------------------
-*/
-// Absolute min and max eeprom addresses. Actual values are hardware-dependent.
-// These values can be changed e.g. to protect eeprom cells outside this range.
-const int EEPROM_MIN_ADDR = 0;
-const int EEPROM_MAX_ADDR = 1023; // Arduino UNO => 1024B
-
-// Returns true if the address is between the
-// minimum and maximum allowed values, false otherwise.
-//
-// This function is used by the other, higher-level functions
-// to prevent bugs and runtime errors due to invalid addresses.
-boolean eeprom_is_addr_ok(int addr)
-{
-  return ((addr >= EEPROM_MIN_ADDR) && (addr <= EEPROM_MAX_ADDR));
-}
-
-/**
-   Writes a sequence of bytes to eeprom starting at the specified address.
-   Returns true if the whole array is successfully written.
-   Returns false if the start or end addresses aren't between the minimum and maximum allowed values.
-   When returning false, nothing gets written to eeprom.
-*/
-boolean eeprom_write_bytes(int startAddr, const byte *array, int numBytes)
-{
-  int i;
-  // both first byte and last byte addresses must fall within the allowed range
-  if (!eeprom_is_addr_ok(startAddr) || !eeprom_is_addr_ok(startAddr + numBytes))
-  {
-    return false;
-  }
-  for (i = 0; i < numBytes; i++)
-  {
-    EEPROM.write(startAddr + i, array[i]);
-  }
-  return true;
-}
-
-/**
-   Writes a string starting at the specified address.
-   Returns true if the whole string is successfully written.
-   Returns false if the address of one or more bytes fall outside the allowed range.
-   If false is returned, nothing gets written to the eeprom.
-*/
-boolean eeprom_write_string(int addr, const char *string)
-{
-  int numBytes;                  // actual number of bytes to be written
-  numBytes = strlen(string) + 1; //write the string contents plus the string terminator byte (0x00)
-  return eeprom_write_bytes(addr, (const byte *)string, numBytes);
-}
-
-/**
-   Reads a string starting from the specified address.
-   Returns true if at least one byte (even only the string terminator one) is read.
-   Returns false if the start address falls outside the allowed range or declare buffer size is zero.
-
-   The reading might stop for several reasons:
-   - no more space in the provided buffer
-   - last eeprom address reached
-   - string terminator byte (0x00) encountered.
-*/
-boolean eeprom_read_string(int addr, char *buffer, int bufSize)
-{
-  byte ch;       // byte read from eeprom
-  int bytesRead; // number of bytes read so far
-  if (!eeprom_is_addr_ok(addr))
-  { // check start address
-    return false;
-  }
-
-  if (bufSize == 0)
-  { // how can we store bytes in an empty buffer ?
-    return false;
-  }
-  // is there is room for the string terminator only, no reason to go further
-  if (bufSize == 1)
-  {
-    buffer[0] = 0;
-    return true;
-  }
-  bytesRead = 0;                      // initialize byte counter
-  ch = EEPROM.read(addr + bytesRead); // read next byte from eeprom
-  buffer[bytesRead] = ch;             // store it into the user buffer
-  bytesRead++;                        // increment byte counter
-  // stop conditions:
-  // - the character just read is the string terminator one (0x00)
-  // - we have filled the user buffer
-  // - we have reached the last eeprom address
-  while ((ch != 0x00) && (bytesRead < bufSize) && ((addr + bytesRead) <= EEPROM_MAX_ADDR))
-  {
-    // if no stop condition is met, read the next byte from eeprom
-    ch = EEPROM.read(addr + bytesRead);
-    buffer[bytesRead] = ch; // store it into the user buffer
-    bytesRead++;            // increment byte counter
-  }
-  // make sure the user buffer has a string terminator, (0x00) as its last byte
-  if ((ch != 0x00) && (bytesRead >= 1))
-  {
-    buffer[bytesRead - 1] = 0;
-  }
-  return true;
-}
 
 /*
    --------------------------------------------------------------------------------------
@@ -210,32 +113,6 @@ public:
   void loadMidiMap();
   bool patchExists();
   void clearPatch();
-
-  // New functionality saving patches as json
-  // Json to create is shown in example below
-  // {
-  //   "0": [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15],
-  //   "1": [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15],
-  //   "2": [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15],
-  //   "3": [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15],
-  //   "4": [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15],
-  //   "5": [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15],
-  //   "6": [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]
-  // }
-
-  // Based on ArduinoJson assistant the capacity required is:
-  // 7*JSON_ARRAY_SIZE(16) + JSON_OBJECT_SIZE(7) + 14 bytes for strings duplication
-  // https://arduinojson.org/v6/assistant/
-
-  // ??? This means that the most basic of json is too much for a Arduino UNO
-  static const int PatchCapacity = 7*JSON_ARRAY_SIZE(16) + JSON_OBJECT_SIZE(7) + 14;  // AVR 8-bit	952+14 = 966
-
-
-  StaticJsonDocument<PatchManager::PatchCapacity> jsonDoc;
-
-  void saveJsonPatch();
-  void loadJsonPatch();
-  void clearJsonPatch();
 };
 
 void PatchManager::incrementPatchNumber()
@@ -287,36 +164,6 @@ void PatchManager::clearPatch()
     EEPROM.write(addr, 255); // clear the patch by writing 255
     addr++;
   }
-}
-
-void PatchManager::saveJsonPatch()
-{
-  // Write the midi map to json
-  for (byte i = 1; i <= MaxChannel; i++)
-  {
-    jsonDoc["midiMap"][i-1] = midiMap[i].mapsTo;
-  }
-
-  // Declare a buffer to hold the serialized json string
-  const int size = measureJson(jsonDoc) + 1;    // NB: measureJson() count doesn’t count the null-terminator so we need to add one to account for it in the string 
-  char buffer[size];
-  serializeJson(jsonDoc, buffer, size);         // Produce a minified JSON document
-
-  Serial.println("Saving json string to address 0");
-  eeprom_write_string(0, buffer);
-}
-
-void PatchManager::loadJsonPatch()
-{
-  // Load the patch from the EEPROM
-  // TODO
-
-  // Write the json midi map of the patch to the MidiMap
-  // TODO
-}
-
-void PatchManager::clearJsonPatch()
-{
 }
 
 /*
@@ -684,6 +531,22 @@ void handleKeypadButtonPush(byte button)
   }
 }
 
+void processRotaryEncoder()
+{
+  byte direction = rotary.process();
+  if (direction)
+  {
+    if (direction == DIR_CW)
+    {
+      handleButtonUpPressed();
+    }
+    else
+    {
+      handleButtonDownPressed();
+    }
+  }
+}
+
 /*
    -------------------------------------------------------------------------------------------
    MIDI STUFF
@@ -697,31 +560,55 @@ void doMidiMonitor()
   }
 }
 
+void MIDISendTo(
+    midi::MidiInterface<HardwareSerial> from,
+    midi::MidiInterface<HardwareSerial> to
+) {
+    // duplicate message on <from> input to <to> output
+    to.send(
+        from.getType(),
+        from.getData1(),
+        from.getData2(),
+        from.getChannel()
+    );
+}
+
+void MIDISendToAll(
+    midi::MidiInterface<HardwareSerial> from
+) {
+    // duplicate message (except ActiveSensing) on <from> to all MIDI outputs
+    midi::MidiType type = from.getType();
+    if (type != midi::ActiveSensing) {
+        MIDISendTo(from, midi1);
+        MIDISendTo(from, midi2);
+    }
+}
+
 void performMidiMapping()
 {
-  if (enableThru)
+  // Midi 1 is the midi mapper
+  if (midi1.read())
   {
-    // Thru on A has already pushed the input message to out A.
+    int incomingMidiChannel = midi1.getChannel();
+    MidiMapItem midiMapItem = midiMap[incomingMidiChannel];
+
+    // The outgoing midi channel is overriden if a mapping exists, otherwise it is unchanged
+    int outgoingMidiChannel = (midiMapItem.mapsTo > 0) ? midiMapItem.mapsTo : incomingMidiChannel;
+
+    midi1.send(midi1.getType(),
+               midi1.getData1(),
+               midi1.getData2(),
+               outgoingMidiChannel);
+
+    doMidiMonitor();
   }
-  else
+
+  // Midi 2 Merger
+  // - Midi2 input is sent to Midi2 output
+  // - Midi2 input is merged to Mid1 output
+  if (midi2.read())
   {
-    // Thru is disabled in the library so do it manually
-    // Perform the Thru manually
-    if (midi1.read())
-    {
-      int incomingMidiChannel = midi1.getChannel();
-      MidiMapItem midiMapItem = midiMap[incomingMidiChannel];
-
-      // The outgoing midi channel is overriden if a mapping exists, otherwise it is unchanged
-      int outgoingMidiChannel = (midiMapItem.mapsTo > 0) ? midiMapItem.mapsTo : incomingMidiChannel;
-
-      midi1.send(midi1.getType(),
-                 midi1.getData1(),
-                 midi1.getData2(),
-                 outgoingMidiChannel);
-
-      doMidiMonitor();
-    }
+    MIDISendToAll(midi2);
   }
 }
 
@@ -735,34 +622,43 @@ void setup()
   Serial.begin(9600);
   //int tickEvent = t.every(250, onTimerTick);
 
+  rotary.begin();
+
+  // SSD1306_SWITCHCAPVCC = generate display voltage from 3.3V internally
+  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) { // Address 0x3D for 128x64
+    Serial.println(F("SSD1306 allocation failed"));
+    for (;;); // Don't proceed, loop forever
+  }
+  display.clearDisplay();
+  display.setTextColor(WHITE); // Draw white text
+  display.setTextSize(2);
+  display.setCursor(0, 0);     // Start at top-left corner
+  display.println("Midi 1");
+  display.setTextSize(1);
+  display.println("Midi mapper");
+  display.println("");
+  display.setTextSize(2);
+  display.println("Midi 2");
+  display.setTextSize(1);
+  display.println("In2 => Out1 & Out2");
+  display.display();
+
   // Initialize default midi mapping. i.e. Each channel maps to itself
   initializeDefaultMidiMap();
 
-  // Initiate MIDI communications, listen to all channels
+  // Listen to all MIDI channels on both inputs
   midi1.begin(MIDI_CHANNEL_OMNI);
+  midi2.begin(MIDI_CHANNEL_OMNI);
 
-  // Handle default midi thru state for the library
-  if (enableThru)
-  {
-    if (!midi1.getThruState())
-    {
-      midi1.turnThruOn();
-    }
-  }
-  else
-  {
-    midi1.turnThruOff();
-  }
-
-  //pinMode( rxPin, INPUT );
-  //pinMode( txPin, OUTPUT);
-  //mySerial.begin( 31250 );
+  // disable automatic THRU handling
+  midi1.turnThruOff();
+  midi2.turnThruOff(); 
 
   lcd.begin(16, 2); // start the library
   //Print some initial text to the LCD.
   lcd.setCursor(0, 0); //top left
 
-  lcd.print("MIDIChannelizer!");
+  lcd.print("MIDI Mapper!");
 
   //loadMidiMapFromEEPROM();
   delay(250);
@@ -788,6 +684,7 @@ void setup()
 */
 void loop()
 {
+  processRotaryEncoder();
   AnalogKeypadButtons.loopCheck();
 
   performMidiMapping();
